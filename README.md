@@ -39,7 +39,7 @@
 ## Установка
 
 ```bash
-   pip install IMAP-EmailListener
+pip install IMAP-EmailListener
 ```
 
 ---
