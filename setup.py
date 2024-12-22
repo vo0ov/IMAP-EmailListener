@@ -3,8 +3,8 @@ from setuptools import setup, find_packages
 setup(
     name='EmailListener',
     version='1.0.0',
-    author='Ваше Имя',
-    author_email='ваш_email@example.com',
+    author='vo0ov',
+    author_email='artgr123@yandex.ru',
     description='Библиотека для прослушивания и обработки электронных писем через IMAP.',
     long_description=open('README.md', encoding='utf-8').read(),
     long_description_content_type='text/markdown',
