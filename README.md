@@ -237,7 +237,7 @@ def main():
         port=imap_port,
         download_folder='attachments',
         accepted_extensions=['.pdf', '.jpg'],
-        mailbox='Я',
+        mailbox='INBOX',
         search_criteria='UNSEEN'
     )
 
