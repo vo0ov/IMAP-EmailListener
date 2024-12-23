@@ -207,234 +207,55 @@ pip install IMAP-EmailListener
 Ниже приведён полный код файла **email_listener.py** со встроенным примером использования в блоке `if __name__ == '__main__':`.
 
 ```Python
-import os
-import time
-import email
-import imaplib
-from typing import Callable, Any, List, Optional
-from functools import wraps
-from dataclasses import dataclass
-from email.header import decode_header
-from email.message import Message
-from bs4 import BeautifulSoup
+import sys
+from EmailListener import EmailListener, EmailMessage, EmailListenerException
 
-class EmailListenerException(Exception):
-    """Базовое исключение для EmailListener."""
-    pass
 
-@dataclass
-class EmailMessage:
-    title: str
-    body: str
-    sender: str
-    file_paths: List[str]
+def my_email_handler(email: EmailMessage):
+    print('Новое письмо получено!')
+    print(f'Отправитель: {email.sender}')
+    print(f'Тема: {email.title}')
+    print(f'Содержимое:\n{email.body}')
 
-class EmailListener:
-    def __init__(
-        self,
-        email: str,
-        password: str,
-        server: str = 'imap.mail.ru',
-        port: int = 993,
-        download_folder: Optional[str] = None,
-        accepted_extensions: Optional[List[str]] = None,
-        mailbox: str = 'INBOX',
-        search_criteria: str = 'UNSEEN'
-    ):
-        self.email = email
-        self.password = password
-        self.server = server
-        self.port = port
-        self.handlers: List[Callable[[EmailMessage], Any]] = []
+    if email.file_paths:
+        print('Вложения сохранены по следующим путям:')
+        for path in email.file_paths:
+            print(f' - {path}')
+    print('-' * 50)
 
-        self.download_folder = (
-            download_folder
-            if download_folder
-            else os.path.join(os.path.dirname(__file__), 'downloads')
-        )
-        if not os.path.exists(self.download_folder):
-            try:
-                os.makedirs(self.download_folder, exist_ok=True)
-            except OSError as e:
-                raise EmailListenerException(
-                    f'Не удалось создать папку для загрузки: {e}'
-                ) from e
 
-        self.accepted_extensions = (
-            tuple(ext.lower() for ext in accepted_extensions)
-            if accepted_extensions
-            else ('.pdf', '.zip')
-        )
-        self.mailbox = mailbox
-        self.search_criteria = search_criteria
-        self._stop_flag = False
+def main():
+    email_address = 'ПОЧТА'
+    email_password = 'ПАРОЛЬ'  # Чаще пароль приложения
+    imap_server = 'imap.mail.ru'  # Замените на нужный IMAP сервер
+    imap_port = 993  # Порт обычно 993
 
-    def on_new_email(
-        self, interval: int = 5
-    ) -> Callable[[Callable[[EmailMessage], Any]], Callable[[EmailMessage], Any]]:
-        def decorator(func: Callable[[EmailMessage], Any]) -> Callable[[EmailMessage], Any]:
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
-                return func(*args, **kwargs)
-            self.handlers.append(wrapper)
-            return wrapper
-        return decorator
+    mail_listener = EmailListener(
+        email=email_address,
+        password=email_password,
+        server=imap_server,
+        port=imap_port,
+        download_folder='attachments',
+        accepted_extensions=['.pdf', '.jpg'],
+        mailbox='Я',
+        search_criteria='UNSEEN'
+    )
 
-    def _decode_str(self, value: Optional[str]) -> str:
-        if not value:
-            return ''
-        parts = []
-        for decoded, charset in decode_header(value):
-            if isinstance(decoded, bytes):
-                try:
-                    parts.append(decoded.decode(charset or 'utf-8', errors='replace'))
-                except LookupError as e:
-                    raise EmailListenerException(f'Ошибка декодирования заголовка: {e}') from e
-            else:
-                parts.append(decoded)
-        return ''.join(parts)
+    @mail_listener.on_new_email()
+    def handle_new_email(email: EmailMessage):
+        my_email_handler(email)
 
-    def _get_email_body(self, msg: Message) -> str:
-        if msg.is_multipart():
-            for part in msg.walk():
-                ctype = part.get_content_type()
-                if ctype == 'text/plain':
-                    return part.get_payload(decode=True).decode(errors='replace')
-                elif ctype == 'text/html':
-                    html = part.get_payload(decode=True).decode(errors='replace')
-                    return BeautifulSoup(html, 'html.parser').get_text('\n', strip=True)
-        return msg.get_payload(decode=True).decode(errors='replace')
+    try:
+        print('Запуск прослушивания почты...')
+        mail_listener.start(check_interval=10)
+    except EmailListenerException as e:
+        print(f'Произошла ошибка: {e}', file=sys.stderr)
+    except KeyboardInterrupt:
+        print('\nОстановка прослушивания почты пользователем.')
+        mail_listener.stop()
 
-    def _save_attachment(self, part: Message) -> Optional[str]:
-        filename = part.get_filename()
-        if filename:
-            decoded_filename = self._decode_str(filename)
-            if any(decoded_filename.lower().endswith(ext) for ext in self.accepted_extensions):
-                path = os.path.join(self.download_folder, decoded_filename)
-                try:
-                    with open(path, 'wb') as f:
-                        f.write(part.get_payload(decode=True))
-                except OSError as e:
-                    raise EmailListenerException(
-                        f'Не удалось сохранить вложение {decoded_filename}: {e}'
-                    ) from e
-                return path
-        return None
-
-    def start(self, check_interval: int = 5) -> None:
-        self._stop_flag = False
-        try:
-            mail = imaplib.IMAP4_SSL(self.server, self.port)
-        except Exception as e:
-            raise EmailListenerException(f'Ошибка подключения к серверу: {e}') from e
-
-        try:
-            mail.login(self.email, self.password)
-        except Exception as e:
-            raise EmailListenerException(f'Ошибка авторизации: {e}') from e
-
-        try:
-            while not self._stop_flag:
-                try:
-                    mail.select(self.mailbox)
-                except Exception as e:
-                    raise EmailListenerException(f'Ошибка выбора почтового ящика: {e}') from e
-
-                try:
-                    _, email_ids = mail.search(None, self.search_criteria)
-                except Exception as e:
-                    raise EmailListenerException(f'Ошибка поиска писем: {e}') from e
-
-                for eid in email_ids[0].split():
-                    try:
-                        _, email_data = mail.fetch(eid, '(RFC822)')
-                    except Exception as e:
-                        raise EmailListenerException(f'Ошибка чтения письма: {e}') from e
-
-                    try:
-                        msg = email.message_from_bytes(email_data[0][1])
-                    except Exception as e:
-                        raise EmailListenerException(f'Ошибка формирования сообщения: {e}') from e
-
-                    file_paths = []
-                    for part in msg.walk():
-                        if part.get_content_maintype() != 'multipart' and part.get('Content-Disposition'):
-                            saved_path = self._save_attachment(part)
-                            if saved_path:
-                                file_paths.append(saved_path)
-
-                    email_message = EmailMessage(
-                        title=self._decode_str(msg.get('Subject')),
-                        sender=self._decode_str(msg.get('From')),
-                        body=self._get_email_body(msg),
-                        file_paths=file_paths
-                    )
-
-                    for handler in self.handlers:
-                        handler(email_message)
-
-                time.sleep(check_interval)
-
-        except KeyboardInterrupt:
-            raise EmailListenerException('Прослушивание почты остановлено пользователем')
-        finally:
-            try:
-                mail.logout()
-            except Exception:
-                pass
-
-    def stop(self) -> None:
-        self._stop_flag = True
 
 if __name__ == '__main__':
-    def main():
-        mail_listener = EmailListener(
-            email='EMAIL',
-            password='PASSWORD',
-            server='imap.mail.ru',
-            port=993,
-            download_folder='/path/to/custom/folder',
-            accepted_extensions=['.jpg', '.pdf', '.zip'],
-            mailbox='INBOX',
-            search_criteria='UNSEEN'
-        )
-
-        @mail_listener.on_new_email(interval=5)
-        def print_all_emails(message: EmailMessage):
-            print('\n' + '=' * 50)
-            print(f'Тема: {message.title}')
-            print(f'От: {message.sender}')
-            print('\nТекст письма:')
-            print('-' * 20)
-            print(message.body)
-            if message.file_paths:
-                print('\nВложения:')
-                for path in message.file_paths:
-                    print(f'- {path}')
-            print('=' * 50)
-
-        @mail_listener.on_new_email()
-        def handle_important_emails(message: EmailMessage):
-            if 'important@example.com' in message.sender.lower():
-                print(f'\nПолучено важное письмо: {message.title}')
-
-        attachments_count = 0
-
-        @mail_listener.on_new_email()
-        def count_attachments(message: EmailMessage):
-            nonlocal attachments_count
-            if message.file_paths:
-                attachments_count += len(message.file_paths)
-                print(f'\nВсего получено вложений: {attachments_count}')
-
-        print('Запуск прослушивания почты... Нажмите Ctrl+C или вызовите mail_listener.stop() для остановки.')
-        try:
-            mail_listener.start()
-        except EmailListenerException as exc:
-            print(f'\nОшибка в работе EmailListener: {exc}')
-        finally:
-            mail_listener.stop()
-
     main()
 ```
 
